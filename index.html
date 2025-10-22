@@ -73,6 +73,10 @@
 
   <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
   <script>
+    // Sjekk om WaveSurfer er lastet
+    if (typeof WaveSurfer === 'undefined') {
+      document.body.innerHTML = '<div class="card"><h2>Feil: WaveSurfer.js kunne ikke lastes</h2><p>Kontroller internettforbindelsen og last siden på nytt.</p></div>';
+    }
     const $ = sel => document.querySelector(sel);
     const fmt = t => {
       if (!isFinite(t) || t < 0) t = 0;
@@ -99,27 +103,32 @@
 
       if (wavesurfer) wavesurfer.destroy();
 
-      wavesurfer = WaveSurfer.create({
-        container: '#wave',
-        waveColor: '#2c8dbc',
-        progressColor: '#46b3ff',
-        cursorColor: '#fff',
-        height: 120,
-        barWidth: 2,
-        barRadius: 2,
-        barGap: 2,
-        normalize: true,
-      });
+      try {
+        wavesurfer = WaveSurfer.create({
+          container: '#wave',
+          waveColor: '#2c8dbc',
+          progressColor: '#46b3ff',
+          cursorColor: '#fff',
+          height: 120,
+          barWidth: 2,
+          barRadius: 2,
+          barGap: 2,
+          normalize: true,
+        });
 
-      await wavesurfer.loadBlob(file);
-      const duration = wavesurfer.getDuration();
-      startRange.max = duration;
-      endRange.max = duration;
-      endRange.value = duration;
-      startTime = 0;
-      endTime = duration;
-      startLabel.textContent = 'Start ' + fmt(startTime);
-      endLabel.textContent = 'Slutt ' + fmt(endTime);
+        await wavesurfer.loadBlob(file);
+        const duration = wavesurfer.getDuration();
+        startRange.max = duration;
+        endRange.max = duration;
+        endRange.value = duration;
+        startTime = 0;
+        endTime = duration;
+        startLabel.textContent = 'Start ' + fmt(startTime);
+        endLabel.textContent = 'Slutt ' + fmt(endTime);
+      } catch (error) {
+        console.error('Feil ved lasting av lydfil:', error);
+        alert('Kunne ikke laste lydfil. Prøv en annen fil.');
+      }
     });
 
     startRange.addEventListener('input', () => {
@@ -138,6 +147,10 @@
       if (!wavesurfer) return;
       wavesurfer.play(startTime, endTime);
     });
+
+    function writeString(view, offset, string) {
+      for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i));
+    }
 
     function encodeWAV(audioBuffer, startSec, endSec) {
       const sampleRate = audioBuffer.sampleRate;
@@ -177,22 +190,34 @@
         offset += 2;
       }
       return new Blob([view], { type: 'audio/wav' });
-
-      function writeString(view, offset, string) {
-        for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i));
-      }
     }
 
     clipBtn.addEventListener('click', async () => {
       if (!wavesurfer) return;
-      const buffer = wavesurfer.backend.buffer;
-      if (!buffer) return alert('Ingen lyd lastet.');
-      if (endTime <= startTime + 0.01) return alert('Velg et gyldig tidsintervall.');
-      clipBlob = encodeWAV(buffer, startTime, endTime);
-      const url = URL.createObjectURL(clipBlob);
-      openTab.classList.remove('hidden');
-      openTab.onclick = () => window.open(url, '_blank');
-      wavesurfer.play(startTime, endTime);
+      
+      try {
+        // Prøv å få audio buffer fra wavesurfer
+        let buffer = null;
+        if (wavesurfer.backend && wavesurfer.backend.buffer) {
+          buffer = wavesurfer.backend.buffer;
+        } else if (wavesurfer.getDecodedData) {
+          buffer = wavesurfer.getDecodedData();
+        } else {
+          return alert('Kunne ikke få tilgang til lyddata. Prøv å laste filen på nytt.');
+        }
+        
+        if (!buffer) return alert('Ingen lyd lastet.');
+        if (endTime <= startTime + 0.01) return alert('Velg et gyldig tidsintervall.');
+        
+        clipBlob = encodeWAV(buffer, startTime, endTime);
+        const url = URL.createObjectURL(clipBlob);
+        openTab.classList.remove('hidden');
+        openTab.onclick = () => window.open(url, '_blank');
+        wavesurfer.play(startTime, endTime);
+      } catch (error) {
+        console.error('Feil ved klipping av lyd:', error);
+        alert('Kunne ikke klippe lydfil. Prøv igjen.');
+      }
     });
   </script>
 </body>
