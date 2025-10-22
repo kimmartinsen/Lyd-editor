@@ -37,7 +37,10 @@
       color: #fff;
     }
     button:active { transform: translateY(1px); }
+    button:hover { opacity: 0.9; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
     .wave { height: 120px; margin-top: 12px; }
+    .loading { text-align: center; color: #4cc2ff; margin-top: 10px; }
     .slider-line {
       display: flex;
       align-items: center;
@@ -50,6 +53,7 @@
     }
     .label { font-size: 0.9rem; width: 80px; text-align: right; color: #8aa0af; }
     #openTab { background: #4cc2ff; color: #000; font-weight: 600; }
+    #downloadBtn { background: #28a745; color: #fff; font-weight: 600; }
     .hidden { display: none; }
   </style>
 </head>
@@ -67,8 +71,10 @@
       <input type="range" id="endRange" min="0" max="0" step="0.01" value="0">
     </div>
     <button id="playSel">▶ Spill utvalg</button>
-    <button id="clipBtn">✂ Klipp og åpne i ny fane</button>
-    <button id="openTab" class="hidden">🔗 Åpne lydklipp</button>
+    <button id="clipBtn">✂ Klipp ut (32-bit høy kvalitet)</button>
+    <button id="downloadBtn" class="hidden">💾 Last ned klipp</button>
+    <button id="openTab" class="hidden">🔗 Åpne lydklipp i ny fane</button>
+    <div id="loading" class="loading hidden">⏳ Behandler lydfil...</div>
   </div>
 
   <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
@@ -95,13 +101,19 @@
     const endLabel = $('#endLabel');
     const playSel = $('#playSel');
     const clipBtn = $('#clipBtn');
+    const downloadBtn = $('#downloadBtn');
     const openTab = $('#openTab');
+    const loading = $('#loading');
 
     fileInput.addEventListener('change', async e => {
       const file = e.target.files?.[0];
       if (!file) return;
 
       if (wavesurfer) wavesurfer.destroy();
+      
+      loading.classList.remove('hidden');
+      clipBtn.disabled = true;
+      playSel.disabled = true;
 
       try {
         wavesurfer = WaveSurfer.create({
@@ -125,9 +137,14 @@
         endTime = duration;
         startLabel.textContent = 'Start ' + fmt(startTime);
         endLabel.textContent = 'Slutt ' + fmt(endTime);
+        
+        clipBtn.disabled = false;
+        playSel.disabled = false;
+        loading.classList.add('hidden');
       } catch (error) {
         console.error('Feil ved lasting av lydfil:', error);
         alert('Kunne ikke laste lydfil. Prøv en annen fil.');
+        loading.classList.add('hidden');
       }
     });
 
@@ -152,43 +169,52 @@
       for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i));
     }
 
+    // Høykvalitets 32-bit float WAV encoding
     function encodeWAV(audioBuffer, startSec, endSec) {
       const sampleRate = audioBuffer.sampleRate;
       const startSample = Math.floor(startSec * sampleRate);
       const endSample = Math.floor(endSec * sampleRate);
       const numChannels = audioBuffer.numberOfChannels;
       const length = endSample - startSample;
-      const result = new Float32Array(length * numChannels);
-
-      for (let ch = 0; ch < numChannels; ch++) {
-        const data = audioBuffer.getChannelData(ch).subarray(startSample, endSample);
-        for (let i = 0; i < length; i++) {
-          result[i * numChannels + ch] = data[i];
-        }
-      }
-
-      const buffer = new ArrayBuffer(44 + result.length * 2);
+      
+      // Bruk 32-bit float for høyeste kvalitet
+      const bytesPerSample = 4; // 32-bit = 4 bytes
+      const blockAlign = numChannels * bytesPerSample;
+      const byteRate = sampleRate * blockAlign;
+      const dataSize = length * blockAlign;
+      
+      const buffer = new ArrayBuffer(44 + dataSize);
       const view = new DataView(buffer);
 
+      // RIFF header
       writeString(view, 0, 'RIFF');
-      view.setUint32(4, 36 + result.length * 2, true);
+      view.setUint32(4, 36 + dataSize, true);
       writeString(view, 8, 'WAVE');
+      
+      // fmt chunk for 32-bit float PCM
       writeString(view, 12, 'fmt ');
-      view.setUint32(16, 16, true);
-      view.setUint16(20, 1, true);
+      view.setUint32(16, 16, true); // fmt chunk size
+      view.setUint16(20, 3, true); // audio format 3 = IEEE float
       view.setUint16(22, numChannels, true);
       view.setUint32(24, sampleRate, true);
-      view.setUint32(28, sampleRate * numChannels * 2, true);
-      view.setUint16(32, numChannels * 2, true);
-      view.setUint16(34, 16, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, 32, true); // 32 bits per sample
+      
+      // data chunk
       writeString(view, 36, 'data');
-      view.setUint32(40, result.length * 2, true);
+      view.setUint32(40, dataSize, true);
+      
+      // Skriv interleaved audio data (32-bit float)
       let offset = 44;
-      for (let i = 0; i < result.length; i++) {
-        const s = Math.max(-1, Math.min(1, result[i]));
-        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-        offset += 2;
+      for (let i = 0; i < length; i++) {
+        for (let ch = 0; ch < numChannels; ch++) {
+          const sample = audioBuffer.getChannelData(ch)[startSample + i];
+          view.setFloat32(offset, sample, true);
+          offset += 4;
+        }
       }
+      
       return new Blob([view], { type: 'audio/wav' });
     }
 
@@ -196,6 +222,9 @@
       if (!wavesurfer) return;
       
       try {
+        loading.classList.remove('hidden');
+        clipBtn.disabled = true;
+        
         // Prøv å få audio buffer fra wavesurfer
         let buffer = null;
         if (wavesurfer.backend && wavesurfer.backend.buffer) {
@@ -203,20 +232,50 @@
         } else if (wavesurfer.getDecodedData) {
           buffer = wavesurfer.getDecodedData();
         } else {
+          loading.classList.add('hidden');
+          clipBtn.disabled = false;
           return alert('Kunne ikke få tilgang til lyddata. Prøv å laste filen på nytt.');
         }
         
-        if (!buffer) return alert('Ingen lyd lastet.');
-        if (endTime <= startTime + 0.01) return alert('Velg et gyldig tidsintervall.');
+        if (!buffer) {
+          loading.classList.add('hidden');
+          clipBtn.disabled = false;
+          return alert('Ingen lyd lastet.');
+        }
+        if (endTime <= startTime + 0.01) {
+          loading.classList.add('hidden');
+          clipBtn.disabled = false;
+          return alert('Velg et gyldig tidsintervall.');
+        }
+        
+        // Små delay for å la UI oppdatere seg
+        await new Promise(resolve => setTimeout(resolve, 50));
         
         clipBlob = encodeWAV(buffer, startTime, endTime);
         const url = URL.createObjectURL(clipBlob);
+        
+        // Vis nedlastnings- og åpne-knapper
+        downloadBtn.classList.remove('hidden');
+        downloadBtn.onclick = () => {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'lydklipp_32bit.wav';
+          a.click();
+        };
+        
         openTab.classList.remove('hidden');
         openTab.onclick = () => window.open(url, '_blank');
+        
+        loading.classList.add('hidden');
+        clipBtn.disabled = false;
+        
+        // Spill av det klipte utvalget
         wavesurfer.play(startTime, endTime);
       } catch (error) {
         console.error('Feil ved klipping av lyd:', error);
         alert('Kunne ikke klippe lydfil. Prøv igjen.');
+        loading.classList.add('hidden');
+        clipBtn.disabled = false;
       }
     });
   </script>
