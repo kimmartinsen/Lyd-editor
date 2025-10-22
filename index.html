@@ -58,7 +58,7 @@
   </style>
 </head>
 <body>
-  <h1>🎧 Mini Audio Cutter <span style="font-size: 0.6em; color: #4cc2ff;">v3</span></h1>
+  <h1>🎧 Mini Audio Cutter <span style="font-size: 0.6em; color: #4cc2ff;">v4</span></h1>
   <div class="card">
     <input id="fileInput" type="file" accept="audio/*">
     <div id="wave" class="wave"></div>
@@ -132,12 +132,16 @@
         await wavesurfer.loadBlob(file);
         const duration = wavesurfer.getDuration();
         startRange.max = duration;
+        startRange.min = 0;
+        startRange.value = 0;
         endRange.max = duration;
+        endRange.min = 0;
         endRange.value = duration;
         startTime = 0;
         endTime = duration;
-        startLabel.textContent = 'Start ' + fmt(startTime);
-        endLabel.textContent = 'Slutt ' + fmt(endTime);
+        startLabel.textContent = 'Start ' + fmt(0);
+        endLabel.textContent = 'Slutt ' + fmt(duration);
+        console.log('Lydfil lastet. Lengde:', duration, 'sekunder');
         
         clipBtn.disabled = false;
         playSel.disabled = false;
@@ -186,32 +190,27 @@
       }
       
       // Hent aktuelle verdier fra sliders
-      const start = parseFloat(startRange.value);
-      const end = parseFloat(endRange.value);
+      const start = parseFloat(startRange.value) || 0;
+      const end = parseFloat(endRange.value) || wavesurfer.getDuration();
       
-      console.log('Spiller fra', start, 'til', end, 'sekunder');
+      console.log('Starter avspilling fra', start.toFixed(2), 'til', end.toFixed(2), 'sekunder (totalt', (end-start).toFixed(2), 'sek)');
       
       // Sett opp region-avspilling
-      wavesurfer.setTime(start);
+      wavesurfer.seekTo(start / wavesurfer.getDuration());
+      wavesurfer.play();
+      playSel.textContent = '⏸ Stopp';
       
-      // Vent litt før vi starter playback
-      setTimeout(() => {
-        wavesurfer.play();
-        playSel.textContent = '⏸ Stopp';
-        
-        // Stopp ved slutttid
-        playbackInterval = setInterval(() => {
-          const currentTime = wavesurfer.getCurrentTime();
-          if (currentTime >= end || !wavesurfer.isPlaying()) {
-            wavesurfer.pause();
-            wavesurfer.setTime(start);
-            playSel.textContent = '▶ Spill utvalg';
-            clearInterval(playbackInterval);
-            playbackInterval = null;
-            console.log('Avspilling stoppet ved', currentTime);
-          }
-        }, 50);
-      }, 100);
+      // Stopp ved slutttid
+      playbackInterval = setInterval(() => {
+        const currentTime = wavesurfer.getCurrentTime();
+        if (currentTime >= end || !wavesurfer.isPlaying()) {
+          wavesurfer.pause();
+          playSel.textContent = '▶ Spill utvalg';
+          clearInterval(playbackInterval);
+          playbackInterval = null;
+          console.log('Avspilling stoppet ved', currentTime.toFixed(2), 'sekunder');
+        }
+      }, 50);
     });
 
     function writeString(view, offset, string) {
@@ -324,14 +323,17 @@
           playbackInterval = null;
         }
         
-        wavesurfer.setTime(startTime);
+        const start = parseFloat(startRange.value) || 0;
+        const end = parseFloat(endRange.value) || wavesurfer.getDuration();
+        
+        wavesurfer.seekTo(start / wavesurfer.getDuration());
         wavesurfer.play();
         playSel.textContent = '⏸ Stopp';
         
         playbackInterval = setInterval(() => {
-          if (wavesurfer.getCurrentTime() >= endTime || !wavesurfer.isPlaying()) {
+          const currentTime = wavesurfer.getCurrentTime();
+          if (currentTime >= end || !wavesurfer.isPlaying()) {
             wavesurfer.pause();
-            wavesurfer.setTime(startTime);
             playSel.textContent = '▶ Spill utvalg';
             clearInterval(playbackInterval);
             playbackInterval = null;
