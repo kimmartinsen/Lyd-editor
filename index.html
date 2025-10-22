@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="no">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mini Audio Cutter</title>
+  <style>
+    body {
+      background-color: #0b0f12;
+      color: #e6eef4;
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 16px;
+    }
+    h1 { text-align: center; font-size: 1.3rem; margin-bottom: 1rem; }
+    .card {
+      background: #141a1f;
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.25);
+      margin-bottom: 14px;
+    }
+    input[type="file"], button {
+      width: 100%;
+      margin-top: 10px;
+      padding: 12px;
+      border-radius: 12px;
+      border: none;
+      font-size: 16px;
+    }
+    input[type="file"] {
+      background: #1a232b;
+      color: #8aa0af;
+    }
+    button {
+      background: #1a232b;
+      color: #fff;
+    }
+    button:active { transform: translateY(1px); }
+    .wave { height: 120px; margin-top: 12px; }
+    .slider-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: #4cc2ff;
+    }
+    .label { font-size: 0.9rem; width: 80px; text-align: right; color: #8aa0af; }
+    #openTab { background: #4cc2ff; color: #000; font-weight: 600; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1>🎧 Mini Audio Cutter</h1>
+  <div class="card">
+    <input id="fileInput" type="file" accept="audio/*">
+    <div id="wave" class="wave"></div>
+    <div class="slider-line">
+      <span class="label" id="startLabel">Start 0:00</span>
+      <input type="range" id="startRange" min="0" max="0" step="0.01" value="0">
+    </div>
+    <div class="slider-line">
+      <span class="label" id="endLabel">Slutt 0:00</span>
+      <input type="range" id="endRange" min="0" max="0" step="0.01" value="0">
+    </div>
+    <button id="playSel">▶ Spill utvalg</button>
+    <button id="clipBtn">✂ Klipp og åpne i ny fane</button>
+    <button id="openTab" class="hidden">🔗 Åpne lydklipp</button>
+  </div>
+
+  <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+  <script>
+    const $ = sel => document.querySelector(sel);
+    const fmt = t => {
+      if (!isFinite(t) || t < 0) t = 0;
+      const m = Math.floor(t / 60);
+      const s = Math.floor(t % 60);
+      return m + ':' + String(s).padStart(2, '0');
+    };
+
+    let wavesurfer = null;
+    let startTime = 0, endTime = 0, clipBlob = null;
+
+    const fileInput = $('#fileInput');
+    const startRange = $('#startRange');
+    const endRange = $('#endRange');
+    const startLabel = $('#startLabel');
+    const endLabel = $('#endLabel');
+    const playSel = $('#playSel');
+    const clipBtn = $('#clipBtn');
+    const openTab = $('#openTab');
+
+    fileInput.addEventListener('change', async e => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      if (wavesurfer) wavesurfer.destroy();
+
+      wavesurfer = WaveSurfer.create({
+        container: '#wave',
+        waveColor: '#2c8dbc',
+        progressColor: '#46b3ff',
+        cursorColor: '#fff',
+        height: 120,
+        barWidth: 2,
+        barRadius: 2,
+        barGap: 2,
+        normalize: true,
+      });
+
+      await wavesurfer.loadBlob(file);
+      const duration = wavesurfer.getDuration();
+      startRange.max = duration;
+      endRange.max = duration;
+      endRange.value = duration;
+      startTime = 0;
+      endTime = duration;
+      startLabel.textContent = 'Start ' + fmt(startTime);
+      endLabel.textContent = 'Slutt ' + fmt(endTime);
+    });
+
+    startRange.addEventListener('input', () => {
+      if (!wavesurfer) return;
+      startTime = Math.min(parseFloat(startRange.value), endTime - 0.01);
+      startLabel.textContent = 'Start ' + fmt(startTime);
+    });
+
+    endRange.addEventListener('input', () => {
+      if (!wavesurfer) return;
+      endTime = Math.max(parseFloat(endRange.value), startTime + 0.01);
+      endLabel.textContent = 'Slutt ' + fmt(endTime);
+    });
+
+    playSel.addEventListener('click', () => {
+      if (!wavesurfer) return;
+      wavesurfer.play(startTime, endTime);
+    });
+
+    function encodeWAV(audioBuffer, startSec, endSec) {
+      const sampleRate = audioBuffer.sampleRate;
+      const startSample = Math.floor(startSec * sampleRate);
+      const endSample = Math.floor(endSec * sampleRate);
+      const numChannels = audioBuffer.numberOfChannels;
+      const length = endSample - startSample;
+      const result = new Float32Array(length * numChannels);
+
+      for (let ch = 0; ch < numChannels; ch++) {
+        const data = audioBuffer.getChannelData(ch).subarray(startSample, endSample);
+        for (let i = 0; i < length; i++) {
+          result[i * numChannels + ch] = data[i];
+        }
+      }
+
+      const buffer = new ArrayBuffer(44 + result.length * 2);
+      const view = new DataView(buffer);
+
+      writeString(view, 0, 'RIFF');
+      view.setUint32(4, 36 + result.length * 2, true);
+      writeString(view, 8, 'WAVE');
+      writeString(view, 12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * numChannels * 2, true);
+      view.setUint16(32, numChannels * 2, true);
+      view.setUint16(34, 16, true);
+      writeString(view, 36, 'data');
+      view.setUint32(40, result.length * 2, true);
+      let offset = 44;
+      for (let i = 0; i < result.length; i++) {
+        const s = Math.max(-1, Math.min(1, result[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        offset += 2;
+      }
+      return new Blob([view], { type: 'audio/wav' });
+
+      function writeString(view, offset, string) {
+        for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    }
+
+    clipBtn.addEventListener('click', async () => {
+      if (!wavesurfer) return;
+      const buffer = wavesurfer.backend.buffer;
+      if (!buffer) return alert('Ingen lyd lastet.');
+      if (endTime <= startTime + 0.01) return alert('Velg et gyldig tidsintervall.');
+      clipBlob = encodeWAV(buffer, startTime, endTime);
+      const url = URL.createObjectURL(clipBlob);
+      openTab.classList.remove('hidden');
+      openTab.onclick = () => window.open(url, '_blank');
+      wavesurfer.play(startTime, endTime);
+    });
+  </script>
+</body>
+  </html>
